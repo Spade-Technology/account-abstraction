@@ -2,67 +2,89 @@
 
 pragma solidity ^0.8.0;
 
-import "./IValidator.sol";
-import "openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol";
+import "solady/utils/ECDSA.sol";
 import "src/utils/KernelHelper.sol";
-import "account-abstraction/core/Helpers.sol";
 import "src/Kernel.sol";
-import "./ECDSAValidator.sol";
+import {WalletKernelStorage, ExecutionDetail} from "src/abstract/KernelStorage.sol";
+import "src/interfaces/IValidator.sol";
+import "src/common/Types.sol";
 
 struct KillSwitchValidatorStorage {
-    address owner;
     address guardian;
-    uint48 pausedUntil;
+    IKernelValidator validator;
+    ValidAfter pausedUntil;
+    bytes4 disableMode;
 }
 
 contract KillSwitchValidator is IKernelValidator {
     mapping(address => KillSwitchValidatorStorage) public killSwitchValidatorStorage;
 
-    function enable(bytes calldata enableData) external override {
-        killSwitchValidatorStorage[msg.sender].owner = address(bytes20(enableData[0:20]));
-        killSwitchValidatorStorage[msg.sender].guardian = address(bytes20(enableData[20:40]));
+    function enable(bytes calldata enableData) external payable override {
+        killSwitchValidatorStorage[msg.sender].guardian = address(bytes20(enableData[0:20]));
     }
 
-    function disable(bytes calldata) external override {
+    function disable(bytes calldata) external payable override {
         delete killSwitchValidatorStorage[msg.sender];
     }
 
-    function validateSignature(bytes32 hash, bytes calldata signature) external view override returns (uint256) {
+    function validateSignature(bytes32 hash, bytes calldata signature)
+        external
+        view
+        override
+        returns (ValidationData)
+    {
         KillSwitchValidatorStorage storage validatorStorage = killSwitchValidatorStorage[msg.sender];
-        return _packValidationData(
-            validatorStorage.owner != ECDSA.recover(hash, signature), 0, validatorStorage.pausedUntil
-        );
+        ValidationData res = validatorStorage.validator.validateSignature(hash, signature);
+        ValidAfter pausedUntil = validatorStorage.pausedUntil;
+        (,, address result) = parseValidationData(res);
+        if (result != address(1)) {
+            // if signature verification has not been failed, return with the result
+            ValidationData delayedData = packValidationData(pausedUntil, ValidUntil.wrap(0));
+            return _intersectValidationData(res, delayedData);
+        }
+        return SIG_VALIDATION_FAILED;
     }
 
     function validateUserOp(UserOperation calldata _userOp, bytes32 _userOpHash, uint256)
         external
+        payable
         override
-        returns (uint256)
+        returns (ValidationData)
     {
-        address signer;
-        bytes calldata signature;
-        KillSwitchValidatorStorage storage validatorStorage = killSwitchValidatorStorage[_userOp.sender];
-        if (_userOp.signature.length == 6 + 65) {
-            require(bytes4(_userOp.callData[0:4]) != KernelStorage.disableMode.selector);
-            signer = validatorStorage.guardian;
-            uint48 pausedUntil = uint48(bytes6(_userOp.signature[0:6]));
-            require(pausedUntil > validatorStorage.pausedUntil, "KillSwitchValidator: invalid pausedUntil");
-            killSwitchValidatorStorage[_userOp.sender].pausedUntil = pausedUntil;
-            signature = _userOp.signature[6:71];
+        KillSwitchValidatorStorage storage validatorStorage = killSwitchValidatorStorage[msg.sender]; // should use msg.sender to prevent others from changing storage
+        ValidAfter pausedUntil = validatorStorage.pausedUntil;
+        ValidationData validationData;
+        if (address(validatorStorage.validator) != address(0)) {
+            // check for validator at first
+            try validatorStorage.validator.validateUserOp(_userOp, _userOpHash, 0) returns (ValidationData res) {
+                validationData = res;
+            } catch {
+                validationData = SIG_VALIDATION_FAILED;
+            }
+            (,, address result) = parseValidationData(validationData);
+            if (result != address(1)) {
+                // if signature verification has not been failed, return with the result
+                ValidationData delayedData = packValidationData(pausedUntil, ValidUntil.wrap(0));
+                return _intersectValidationData(validationData, delayedData);
+            }
+        }
+        if (_userOp.signature.length == 71) {
+            // save data to this storage
+            validatorStorage.pausedUntil = ValidAfter.wrap(uint48(bytes6(_userOp.signature[0:6])));
+            validatorStorage.validator = KernelStorage(msg.sender).getDefaultValidator();
+            validatorStorage.disableMode = KernelStorage(msg.sender).getDisabledMode();
+            bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(bytes.concat(_userOp.signature[0:6], _userOpHash)));
+            address recovered = ECDSA.recover(hash, _userOp.signature[6:]);
+            if (validatorStorage.guardian != recovered) {
+                return SIG_VALIDATION_FAILED;
+            }
+            return packValidationData(pausedUntil, ValidUntil.wrap(0));
         } else {
-            signer = killSwitchValidatorStorage[_userOp.sender].owner;
-            signature = _userOp.signature;
-        }
-        if (signer == ECDSA.recover(_userOpHash, signature)) {
-            // address(0) attack has been resolved in ECDSA library
-            return _packValidationData(false, 0, validatorStorage.pausedUntil);
-        }
-
-        bytes32 hash = ECDSA.toEthSignedMessageHash(_userOpHash);
-        address recovered = ECDSA.recover(hash, signature);
-        if (signer != recovered) {
             return SIG_VALIDATION_FAILED;
         }
-        return _packValidationData(false, 0, validatorStorage.pausedUntil);
+    }
+
+    function validCaller(address, bytes calldata) external pure override returns (bool) {
+        revert("not implemented");
     }
 }
