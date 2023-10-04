@@ -8,6 +8,7 @@ import "src/factory/MultiECDSAFactoryPatch.sol";
 import "src/Kernel.sol";
 import "src/validator/MultiECDSAValidator.sol";
 import "src/validator/MultiECDSAValidatorNew.sol";
+import "src/validator/UniversalSigValidator.sol";
 import "src/test/TestValidator.sol";
 import "src/test/TestExecutor.sol";
 import "src/test/TestERC721.sol";
@@ -52,6 +53,52 @@ contract KernelMultiOwnedPatchTest is KernelTestBase {
         // factory = KernelFactory(address(newFactory));
         // _setAddress();
     }
+
+    function test_validate_signature() external {
+        Kernel kernel2 = Kernel(
+            payable(
+                address(
+                    newFactory.createAccount(
+                        3
+                    )
+                )
+            )
+        );
+        bytes32 hash = keccak256(abi.encodePacked("hello world"));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
+        assertEq(kernel2.isValidSignature(hash, abi.encodePacked(r, s, v)), Kernel.isValidSignature.selector);
+    }
+
+    // function test_validate_signature_erc6492() external {
+    //     bytes32 ERC6492_DETECTION_SUFFIX = 0x6492649264926492649264926492649264926492649264926492649264926492;
+
+    //     bytes memory factoryCalldata = abi.encodeWithSelector(
+    //         MultiECDSAFactoryPatch.createAccount.selector,
+    //         3
+    //     );
+
+    //     bytes32 hash = keccak256(abi.encodePacked("hello world"));
+    //     (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
+
+    //     bytes memory signature_1271 = abi.encodePacked(r, s, v);
+    //     console.logBytes(signature_1271);
+
+    //     bytes memory signature = abi.encode(
+    //         address(newFactory),
+    //         factoryCalldata,
+    //         signature_1271
+    //     );
+    //     bytes memory signature_6492 = abi.encodePacked(
+    //         signature,
+    //         ERC6492_DETECTION_SUFFIX
+    //     );
+
+    //     ValidateSigOffchain signatureValidator = new ValidateSigOffchain(
+    //         owner,
+    //         hash,
+    //         signature_6492
+    //     );
+    // }
 
     function testDeternimisticAddress() external {
         address proxy = newFactory.createAccount(2);

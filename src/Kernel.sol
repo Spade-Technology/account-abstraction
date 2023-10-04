@@ -11,6 +11,7 @@ import "./utils/KernelHelper.sol";
 
 import "src/common/Constants.sol";
 import "src/common/Enum.sol";
+import "forge-std/Test.sol";
 
 /// @title Kernel
 /// @author taek<leekt216@gmail.com>
@@ -225,7 +226,7 @@ contract Kernel is EIP712, Compatibility, KernelStorage {
         if (result != address(0)) {
             return 0xffffffff;
         }
-
+        console.log("check0");
         return 0x1626ba7e;
     }
 
