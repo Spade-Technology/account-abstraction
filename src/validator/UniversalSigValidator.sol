@@ -2,8 +2,6 @@
 
 pragma solidity ^0.8.0;
 
-import "forge-std/Test.sol";
-
 // As per ERC-1271
 interface IERC1271Wallet {
   function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4 magicValue);
@@ -45,10 +43,7 @@ contract UniversalSigValidator {
 
     // Try ERC-1271 verification
     if (isCounterfactual || contractCodeLen > 0) {
-      console.log("check1");
       try IERC1271Wallet(_signer).isValidSignature(_hash, sigToValidate) returns (bytes4 magicValue) {
-        console.log("check2");
-        console.logBytes4(magicValue);
         bool isValid = magicValue == ERC1271_SUCCESS;
 
         // retry, but this time assume the prefix is a prepare call
@@ -67,7 +62,6 @@ contract UniversalSigValidator {
 
         return isValid;
       } catch (bytes memory err) {
-        console.log("check revert");
         // retry, but this time assume the prefix is a prepare call
         if (!tryPrepare && contractCodeLen > 0) {
           return isValidSigImpl(_signer, _hash, _signature, allowSideEffects, true);
